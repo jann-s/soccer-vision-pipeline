@@ -1,0 +1,7 @@
+# soccer_bytetrack.yaml
+tracker_type: bytetrack
+track_thresh: 0.45     # geringfügig runter für den Ball
+match_thresh: 0.85     # straffer Match
+track_buffer: 30       # kürzerer Puffer bei schnellen Bewegungen
+frame_rate: 25
+mot20: False
