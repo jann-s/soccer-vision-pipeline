@@ -1,74 +1,70 @@
-# Fußball – Detection · Tracking · Team-Clustering · Roster-IDs
+# Soccer — Detection · Tracking · Team Clustering · Roster IDs
 
-Kurz: Dieses Projekt verarbeitet ein Fußball-Video und liefert
-1) ein annotiertes Overlay-Video (Spieler-Ringe in Teamfarbe, Ball-Pfeil, Team-Nummern 1–11)  
-2) eine CSV mit X/Y-Koordinaten und Metadaten je Frame.
+Process a soccer video end-to-end and produce:
+1) an annotated overlay video (team-colored open foot rings, ball pointer, team-local numbers 1–11), and  
+2) a CSV with per-frame coordinates and metadata.
 
----
 
-## 🧭 Überblick
+## Overview
 
-- **Detection** (YOLO): Personen + Ball
-- **Tracking** (ByteTrack/BOTSORT via Ultralytics `model.track`): stabile Track-IDs über Zeit
-- **Team-Clustering** (K=3): Farbfeatures aus Trikot-Patches → TEAM1, TEAM2, REF
-- **Roster-IDs**: pro Team laufende Nummern 1–11 (kleinste freie Nummer wird wiederverwendet)
-- **Visualisierung**: offene Fußringe (oben offen) in Teamfarbe, Ball mit Pfeil
-- **Export**: CSV mit Zeit, Koordinaten (Pixel + normalisiert optional), Rolle/Team, Nummer, etc.
+- **Detection (YOLO):** player and ball classes
+- **Tracking (ByteTrack/BOTSORT via Ultralytics `model.track`):** stable track IDs over time
+- **Team Clustering (K=3):** jersey color features → TEAM1, TEAM2, REF
+- **Roster IDs:** per-team numbering 1–11 (reuses the lowest free number on return)
+- **Visualization:** open foot rings (gap on top) in team color, ball highlighted with a pointer
+- **Export:** CSV with time, pixel coordinates (optionally normalized), role/team, number, motion stats
 
----
 
-## 🔩 Pipeline (End-to-End)
+## Pipeline
 
 Video
-└─ YOLO Detection (Spieler, Ball)
-└─ Multi-Object-Tracking (ByteTrack/BOTSORT): tid je Person/Ball
-└─ Farbfeature-Update je Track (EMA)
-└─ K=3 Clustering (Team1 / Team2 / Ref), Permutationsschutz
-└─ Roster: Team-Nummern 1–11 (kleinste freie Nummer)
-├─ Overlay (Ringe + Ballpfeil + Nummern)
-└─ CSV Export (Koordinaten + Metadaten)
+ └─ YOLO detection (players, ball)
+    └─ Multi-object tracking (ByteTrack/BOTSORT): per-object track ID (tid)
+       └─ Per-track jersey color feature update (EMA)
+          └─ K=3 clustering (TEAM1 / TEAM2 / REF) with permutation protection
+             └─ Roster numbering: 1–11 per team (reassign lowest free on return)
+                ├─ Overlay (open rings + ball pointer + numbers)
+                └─ CSV export (coordinates + metadata)
 
 
-## 📁 Projektstruktur
-├── detect.py # Main-Loop (I/O, Tracking, Clustering, Rendering, CSV)
+## Project Structure
+
+├── detect.py                   # Main loop (I/O, tracking, clustering, rendering, CSV)
 ├── tracking/
-│ ├── clustering.py # TeamClusterer: jersey_patch, hsv_hist_feature, K=3 + prev-centers
-│ ├── roster.py # TeamRoster: stabile Nummern pro Team, 1–11, kleinste freie
-│ ├── viz.py # draw_team_rings (offene Ringe), draw_ball_pointer-Integration
-│ └── utils.py # tracker_cfg_path, draw_ball_pointer, mad_threshold (optional)
+│   ├── clustering.py           # TeamClusterer: jersey_patch, hsv_hist_feature, K=3 + prev-centers
+│   ├── roster.py               # TeamRoster: stable team-local numbers, 1–11, reuse lowest free
+│   ├── viz.py                  # draw_team_rings (open rings), ball pointer integration
+│   └── utils.py                # tracker_cfg_path, draw_ball_pointer, mad_threshold (optional)
 ├── weights/
-│ └── yolov8m_forzasys_soccer.pt # Beispiel-Gewichte (Pfad frei wählbar)
+│   └── yolov8m_forzasys_soccer.pt   # Example weights (path is configurable)
 ├── data/
-│ └── testvideo.mp4 # Eingabevideo
+│   └── testvideo.mp4           # Input video
 └── outputs/
-└── test_run.mp4 # Annotiertes Ergebnis
+    └── test_run.mp4            # Annotated result
 
----
-
-## 🧠 Theorie (kurz & praxisnah)
+## Theory
 
 ### Detection
-- Vortrainiertes YOLO-Modell (Fußball-tauglich): erkennt **Person** und **Ball**.
+A pretrained YOLO model detects **person** and **ball** classes on each processed frame.
 
 ### Tracking
-- Ultralytics `model.track` nutzt ByteTrack/BOTSORT → **tid** pro Objekt über Zeit (robust auch bei Lücken).
+Ultralytics `model.track` runs ByteTrack or BOTSORT to produce consistent **track IDs (tid)** over time, bridging brief misses.
 
-### Team-Clustering (Farbbasiert)
-- Patch: oberer Anteil der Personenbox (Trikot).
-- HSV-Features mit **Gras-Maske** (Grünanteile ausgeschlossen), Normierung, **EMA-Glättung** je Track.
-- K=3 k-means: Drei Cluster → kleinste Gruppe = **REF** (mit Helligkeits-/Sättigungs-Tie-Break).
-- **Permutationsschutz**: Zuordnung der beiden Team-Cluster zu TEAM1/TEAM2 via Distanz zu den **Zentren des letzten Laufs**.
+### Team Clustering (Color-based)
+- **Patch:** top fraction of the person box (jersey region).
+- **Features:** HSV histograms with an explicit **grass mask**, L1-normalized; per-track **EMA** smoothing over time.
+- **Clustering:** **K-Means (K=3)** → smallest cluster is **REF** (tie-break by mean S/V); remaining two are teams.
+- **Permutation protection:** map current team clusters to TEAM1/TEAM2 by minimal distance to **previous centers**.
 
-### Roster-IDs (Teamnummern 1–11)
-- Pro Team: `tid ↔ num` Maps. Nur **sichtbare** TEAM1/TEAM2-TIDs zählen.
-- Nicht sichtbare/UNK/REF werden **sofort freigegeben**.
-- Rückkehrer bekommen die **kleinste freie Nummer** (1–11, danach 12, 13, … bei Überbelegung).
+### Roster IDs (1–11 per team)
+- Maintain `tid ↔ number` maps per team, considering **only visible** TEAM1/TEAM2 tracks each frame.
+- Release numbers immediately when a track is not visible or leaves TEAM1/TEAM2.
+- When a player returns, assign the **lowest free number** (1–11; then 12, 13, … if temporarily over capacity).
 
-### Visualisierung
-- **Offene, dünne Fußringe** (oben Lücke), etwas entsättigt; Rahmen um die Beine.
-- **Ball-Pfeil** (kein Ring beim Ball).
+### Visualization
+- **Open, thin foot rings** (gap on top), slightly desaturated for a clean look; placed at the foot anchor.
+- **Ball pointer** (triangle above the ball, subtle circle at center); no ring for the ball.
 
----
 
 ## ⚙️ Installation
 
@@ -79,8 +75,11 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 pip install --upgrade pip
 pip install ultralytics opencv-python numpy torch torchvision
-# Optional, falls benötigt:
-# pip install scipy
+# Optional
+pip install scipy
+```
+
+## Quick Start
 
 python detect.py \
   --source data/testvideo.mp4 \
@@ -89,23 +88,19 @@ python detect.py \
   --mark_ball \
   --show_ids
 
-  Nützliche Parameter:
+## Useful CLI Flags
 
---imgsz 1280 – Inferenzauflösung
-
---conf 0.30 / --iou 0.6 – Detektionsschwellen
-
---target_fps 8.0 – Ziel-FPS im Output (Writer)
-
---process_every_n 3 – nur jedes n-te Frame inferieren (Tracking füllt dazwischen)
-
---cluster_every 10 – alle N verarbeiteten Frames neu clustern
-
---detect "person,ball" – Klassenfilter (Namen oder IDs)
-
---tracker bytetrack – oder botsort
-
---tracker_cfg bytetrack.yaml – optional eigenes YAML
+| Flag | Description |
+|---|---|
+| `--imgsz 1280` | Inference resolution |
+| `--conf 0.30`, `--iou 0.6` | Detection thresholds |
+| `--target_fps 8.0` | Output FPS (video writer) |
+| `--process_every_n 3` | Run inference every Nth frame (tracking fills in between) |
+| `--cluster_every 10` | Re-cluster every N **processed** frames |
+| `--detect "person,ball"` | Class filter (names or IDs) |
+| `--tracker bytetrack` | Or `botsort` |
+| `--tracker_cfg bytetrack.yaml` | Optional custom tracker YAML |
+| `--save_csv csv/run1_tracks.csv` | Write enriched CSV |
 
 ## CSV-Output
 
@@ -114,24 +109,7 @@ x1,y1,x2,y2,cx,cy,foot_x,foot_y,w,h,area,aspect,
 role,team_num,is_ball,
 speed_px_s,dir_deg,trail_len
 
-Bedeutung:
+## Attribution / License
 
-    frame, t_sec – Frameindex und Timestamp [s] (aus FPS)
-
-    tid – Tracker-ID, cls_id, class_name, conf – Detektionsinfos
-
-    x1..y2 – BBox (px), cx,cy – Boxzentrum (px), foot_x,foot_y – Fußpunkt (px)
-
-    w,h,area,aspect – Boxgeometrie
-
-    role – {TEAM1, TEAM2, REF, UNK, BALL}
-
-    team_num – 1–11 (nur TEAM1/TEAM2), sonst leer
-
-    is_ball – 0/1
-
-    speed_px_s – Geschwindigkeit am Fußpunkt [px/s]
-
-    dir_deg – Richtung (0° rechts, 90° unten)
-
-    trail_len – Länge der gezeichneten Spur
+- Detector/Tracker via [Ultralytics YOLO](https://github.com/ultralytics/ultralytics).  
+- ByteTrack/BOTSORT as integrated in Ultralytics.
